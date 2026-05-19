@@ -1,15 +1,21 @@
-from datetime import datetime
 import os
+from datetime import datetime
 from typing import List
-from crewai.project import CrewBase, agent, task, crew
 from pydantic import BaseModel
-from crewai import Agent, Task, Crew, LLM
 from crewai.flow.flow import Flow, listen, start, router, or_
 from crewai.agent import LiteAgentOutput
+from crewai import Agent, Task, Crew, LLM
+from crewai.project import CrewBase, agent, task, crew
 from env import OPENAI_API_KEY
 from tools import web_search_tool
 
 os.environ["OPENAI_API_KEY"] = OPENAI_API_KEY
+
+
+class Post(BaseModel):
+    title: str
+    content: str
+    hashtag: List[str]
 
 
 class ScoreManager(BaseModel):
@@ -17,18 +23,13 @@ class ScoreManager(BaseModel):
     reason: str = ""
 
 
-class Post(BaseModel):
-    title: str = ""
-    content: str = ""
-
-
 class BlogContentMakerState(BaseModel):
+
     topic: str = ""
     max_length: int = 1000
     research_data: LiteAgentOutput | None = None
     score_manager: ScoreManager | None = None
     post: Post | None = None
-    iteration: int = 0
 
 
 @CrewBase
@@ -101,8 +102,10 @@ class SEOManagerCrew:
 
 
 class BlogContentMakerFlow(Flow[BlogContentMakerState]):
+
     @start()
     def init_make_blog_content(self):
+
         if self.state.topic == "":
             raise ValueError("주제는 비워둘 수 없습니다")
 
@@ -115,6 +118,7 @@ class BlogContentMakerFlow(Flow[BlogContentMakerState]):
             tools=[web_search_tool],
             llm="openai/o4-mini",
         )
+
         self.state.research_data = researcher.kickoff(f"""
             '{self.state.topic}' 주제에 대해 다음 요소들을 중심으로 종합적인 리서치를 수행하세요:
 
@@ -212,27 +216,33 @@ class BlogContentMakerFlow(Flow[BlogContentMakerState]):
 
     @listen(handle_make_blog)
     def manage_seo(self):
-        results = (
+
+        if self.state.post is None:
+            raise ValueError("post가 없습니다.")
+
+        result = (
             SEOManagerCrew()
             .crew()
             .kickoff(
                 inputs={
-                    "post": self.state.post.model_dump_json(),
                     "topic": self.state.topic,
+                    "post": self.state.post.model_dump_json(),
                 }
             )
         )
-        self.state.score_manager = results.pydantic
+        self.state.score_manager = result.pydantic  # type: ignore
 
-    @listen(manage_seo)
+    @router(manage_seo)
     def manage_score_router(self):
-        if (
-            self.state.score_manager and self.state.score_manager.score >= 70
-        ) or self.state.iteration >= 10:
+
+        if self.state.score_manager is None:
+            raise ValueError("score_manager가 없습니다.")
+
+        if self.state.score_manager.score >= 80:
             self._save_to_markdown()
             return None
+
         else:
-            self.state.iteration += 1
             return "remake"
 
     def _save_to_markdown(self):
@@ -266,5 +276,7 @@ class BlogContentMakerFlow(Flow[BlogContentMakerState]):
 
 
 flow = BlogContentMakerFlow()
-flow.kickoff(inputs={"topic": "인공지능의 미래"})
+
+flow.kickoff(inputs={"topic": "AI 로보틱스"})
+
 flow.plot()
