@@ -1,4 +1,11 @@
 import os
+
+# CrewAI initializes OpenTelemetry during import. Disable it before importing
+# crewai to avoid local runs timing out while exporting anonymous spans.
+os.environ.setdefault("OTEL_SDK_DISABLED", "true")
+os.environ.setdefault("CREWAI_DISABLE_TELEMETRY", "true")
+os.environ.setdefault("CREWAI_DISABLE_TRACKING", "true")
+
 from crewai import Crew, Agent, Task
 from crewai.project import CrewBase, task, agent, crew
 from env import (

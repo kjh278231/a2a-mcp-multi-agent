@@ -13,7 +13,7 @@ def split_message(text: str, max_length: int) -> list[str]:
     for line in text.split("\n"):
         # 한 줄이 max_length보다 길면 먼저 강제로 잘라냅니다.
         line_parts = [
-            line[index:index + max_length]
+            line[index : index + max_length]
             for index in range(0, len(line), max_length)
         ] or [""]
 
