@@ -1,9 +1,14 @@
 [project]
-name = "ai-agent"
+name = "agent-a-to-z"
 version = "0.1.0"
-description = "Add your description here"
-readme = "README.md"
-requires-python = ">=3.14"
+description = "ai agent offline class"
+readme = "[README.md](http://readme.md/)"
+requires-python = ">=3.13, <=3.14.5"
 dependencies = [
-    "feedparser>=6.0.12",
+  "crewai[tools]==0.177.0",
+  "dotenv==0.9.9",
+  "firecrawl-py==3.4.0",
+  "langgraph==0.6.7",
+  "langchain-openai==0.2.14",
+  "langchain-community==0.3.29",
 ]
