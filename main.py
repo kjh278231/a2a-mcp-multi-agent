@@ -1,313 +1,270 @@
+from datetime import datetime
 import os
-
-# CrewAI initializes OpenTelemetry during import. Disable it before importing
-# crewai to avoid local runs timing out while exporting anonymous spans.
-os.environ.setdefault("OTEL_SDK_DISABLED", "true")
-os.environ.setdefault("CREWAI_DISABLE_TELEMETRY", "true")
-os.environ.setdefault("CREWAI_DISABLE_TRACKING", "true")
-
-from crewai import Crew, Agent, Task
-from crewai.project import CrewBase, task, agent, crew
-from env import (
-    OPENAI_API_KEY,
-    GOOGLE_API_KEY,
-    NAVER_API_CLIENT_ID,
-    NAVER_API_SECRET_KEY,
-)
-from tools import web_search_tool, global_news_rss_tool, korean_news_rss_tool
+from typing import List
+from crewai.project import CrewBase, agent, task, crew
+from pydantic import BaseModel
+from crewai import Agent, Task, Crew, LLM
+from crewai.flow.flow import Flow, listen, start, router, or_
+from crewai.agent import LiteAgentOutput
+from env import OPENAI_API_KEY
+from tools import web_search_tool
 
 os.environ["OPENAI_API_KEY"] = OPENAI_API_KEY
 
-FETCH_NEWS_COUNT = 10
+
+class ScoreManager(BaseModel):
+    score: int = 0
+    reason: str = ""
+
+
+class Post(BaseModel):
+    title: str = ""
+    content: str = ""
+
+
+class BlogContentMakerState(BaseModel):
+    topic: str = ""
+    max_length: int = 1000
+    research_data: LiteAgentOutput | None = None
+    score_manager: ScoreManager | None = None
+    post: Post | None = None
+    iteration: int = 0
 
 
 @CrewBase
-class NewsCrew:
+class SEOManagerCrew:
 
     @agent
-    def research_specialist_agent(self) -> Agent:
+    def seo_agent(self):
         return Agent(
-            role="리서치 전문가 (Research Specialist)",
-            goal="최신 뉴스 아티클 RSS를 최대한 많이 수집한다",
+            role="SEO 전문가",
+            goal="블로그 게시물의 SEO 효율성을 엄격하고 정확하게 평가하여 검색 엔진 최적화 품질을 측정합니다. 각 평가 요소에 대해 구체적이고 실용적인 피드백을 제공하며, 객관적인 기준에 따라 정확한 점수를 산출합니다.",
             backstory="""
-            당신은 세계적인 뉴스 통신사에서 20년간 근무한 베테랑 리서치 전문가입니다.
-            다양한 소스(Google News RSS, 국내외 주요 언론사)를 샅샅이 뒤져서
-            관련성이 높고 최신의 핫한 뉴스 기사를 찾아내는 전문가입니다.
-            RSS 피드를 통해 실시간으로 업데이트되는 뉴스를 수집하고,
-            중복을 제거하여 가장 가치 있는 정보만을 선별합니다.
-            """,
-            llm="openai/o4-mini",
-            verbose=True,
-            tools=[korean_news_rss_tool, global_news_rss_tool],
-        )
-
-    @agent
-    def senior_editor_agent(self) -> Agent:
-        return Agent(
-            role="수석 편집자 (Senior Editor)",
-            goal="리서치 전문가가 수집한 뉴스 아티클을 검토하여 가장 가치 있는 정보를 선별한다",
-            backstory="""
-            당신은 세계적인 뉴스 통신사에서 30년간 근무한 수석 편집자입니다.
-            수많은 뉴스 기사를 검토하고, 그 중에서 가장 가치 있고 독자들에게 중요한 정보를 선별하는 전문가입니다.
-            리서치 전문가가 수집한 뉴스 아티클을 꼼꼼히 검토하여, 중복된 정보나 중요하지 않은 내용을 제거하고,
-            독자들에게 가장 유익한 뉴스를 선정하는 역할을 맡고 있습니다.
+            당신은 10년 이상의 경력을 가진 SEO 전문 컨설턴트로, 구글 알고리즘 변화와 검색 트렌드에 정통합니다.
+            키워드 밀도, 제목 최적화, 콘텐츠 구조화, 사용자 의도 분석, 가독성 평가 등 모든 SEO 요소를 체계적으로 분석합니다.
+            데이터 기반의 정확한 평가를 통해 콘텐츠가 검색 결과에서 상위 랭킹을 달성할 수 있도록 구체적이고 실행 가능한 개선안을 제시합니다.
             """,
             llm="openai/o4-mini",
             verbose=True,
         )
 
-    @agent
-    def news_curator_agent(self) -> Agent:
-        return Agent(
-            role="뉴스 큐레이터 (News Curator)",
-            goal="수석 편집자가 선별한 뉴스 아티클을 바탕으로 독자들에게 가장 유익한 뉴스를 선정한다",
-            backstory="""
-            당신은 세계적인 뉴스 통신사에서 15년간 근무한 뉴스 큐레이터입니다.
-            수석 편집자가 선별한 뉴스 아티클을 바탕으로, 독자들에게 가장 유익한 뉴스를 선정하는 전문가입니다.
-            다양한 관점에서 뉴스를 분석하고, 독자들이 관심을 가질 만한 주제를 중심으로 뉴스를 큐레이션하는 역할을 맡고 있습니다.
-            """,
-            llm="openai/o4-mini",
-            verbose=True,
-            tools=[web_search_tool],
-        )
-
-    #############################################
     @task
-    def research_global_news_task(self) -> Task:
+    def check_seo_task(self):
         return Task(
-            agent=self.research_specialist_agent(),
-            description=f"""
-            글로벌 뉴스 RSS 소스에서 최신 뉴스 기사를 수집합니다.
-
-            **필수 작업 순서 (반드시 따라야 함):**
-
-            1. **첫 번째로 global_news_rss_tool()을 호출**하여 실제 RSS 데이터를 가져와야 합니다.
-            2. **도구 호출 결과를 기다리고 받은 실제 데이터만 사용**해야 합니다.
-            3. **절대로 임의의 뉴스나 예시 데이터를 생성하지 마세요.**
-            4. RSS 도구에서 받은 데이터를 중요도와 관련성에 따라 정렬하세요 (최신순 우선).
-            5. 중복된 기사를 제거하세요.
-            6. 상위 {FETCH_NEWS_COUNT}개의 가장 핫한 이슈 기사를 선별하세요.
-
-            **경고: 이 작업은 실제 뉴스 수집이므로 반드시 global_news_rss_tool을 호출해야 하며,
-            그 이전 날짜의 가짜 뉴스를 만들어내는 것은 절대 금지됩니다.
-            RSS 도구는 현재의 실제 뉴스를 제공합니다.**
-            """,
-            expected_output="""
-            다음 형식의 JSON 리스트:
-            [
-                {
-                    "title": "기사 제목",
-                    "link": "기사 URL",
-                    "summary": "기사 요약",
-                    "published": "발행 날짜",
-                    "source": "뉴스 소스",
-                    "importance_score": "1-10 중요도 점수"
-                }
-            ]
-            최대 {FETCH_NEWS_COUNT}개의 글로벌 뉴스 기사 목록
-            """,
-            output_file="output/global_news.json",
-        )
-
-    @task
-    def research_korea_news_task(self) -> Task:
-        return Task(
-            agent=self.research_specialist_agent(),
-            description=f"""
-            한국 뉴스 RSS 소스에서 최신 뉴스 기사를 수집합니다.
-
-            **필수 작업 순서 (반드시 따라야 함):**
-
-            1. **첫 번째로 korean_news_rss_tool()을 호출**하여 실제 RSS 데이터를 가져와야 합니다.
-            2. **도구 호출 결과를 기다리고 받은 실제 데이터만 사용**해야 합니다.
-            3. **절대로 임의의 뉴스나 예시 데이터를 생성하지 마세요.**
-            4. RSS 도구에서 받은 데이터를 중요도와 관련성에 따라 정렬하세요 (최신순 우선).
-            5. 중복된 기사를 제거하세요.
-            6. 상위 {FETCH_NEWS_COUNT}개의 가장 핫한 이슈 기사를 선별하세요.
-
-            **경고: 이 작업은 실제 뉴스 수집이므로 반드시 korean_news_rss_tool을 호출해야 하며,
-            그 이전 날짜의 가짜 뉴스를 만들어내는 것은 절대 금지됩니다.
-            RSS 도구는 현재의 실제 뉴스를 제공합니다.**
-            """,
-            expected_output="""
-            다음 형식의 JSON 리스트:
-            [
-                {
-                    "title": "기사 제목",
-                    "link": "기사 URL",
-                    "summary": "기사 요약",
-                    "published": "발행 날짜",
-                    "source": "뉴스 소스",
-                    "importance_score": "1-10 중요도 점수"
-                }
-            ]
-            최대 {FETCH_NEWS_COUNT}개의 한국 뉴스 기사 목록
-            """,
-            output_file="output/korea_news.json",
-        )
-
-    #############################################
-    @task
-    def edit_and_summarize_articles_task(self) -> Task:
-        return Task(
-            agent=self.senior_editor_agent(),
             description="""
-            리서치 에이전트가 수집한 글로벌 뉴스와 한국 뉴스 기사들의 실제 본문을 추출하고 요약합니다.
+            주어진 블로그 게시물을 다음 SEO 기준으로 종합 분석하여 정확한 점수와 개선 방안을 제시하세요:
 
-            **필수 작업 순서:**
+            ## 평가 기준 (각 항목별 세부 분석 필수):
+            1. **키워드 최적화 (25점)**
+               - 타겟 키워드의 자연스러운 배치와 밀도
+               - 제목, 소제목, 본문 내 키워드 활용도
+               - 관련 키워드 및 동의어 사용
 
-            1. **이전 Task 결과 활용**:
-               - research_global_news_task와 research_korea_news_task에서 수집된 모든 뉴스 기사 데이터를 사용합니다.
-               - 각 기사의 link 필드에 있는 URL에 접근하여 실제 기사 본문을 추출합니다.
+            2. **제목 및 구조 최적화 (25점)**
+               - 제목의 검색 친화성과 클릭 유도성
+               - 헤딩 태그(H1, H2, H3) 구조화
+               - 논리적 콘텐츠 흐름
 
-            2. **기사 본문 추출**:
-               - 각 뉴스 링크에 접속하여 기사의 실제 본문 내용을 추출합니다.
-               - 광고, 관련 기사, 댓글 등 불필요한 내용은 제외하고 핵심 기사 내용만 추출합니다.
-               - 제목, 날짜, 본문, 출처를 명확히 구분하여 추출합니다.
+            3. **콘텐츠 품질 및 길이 (25점)**
+               - 정보의 정확성과 유용성
+               - 적절한 콘텐츠 길이와 깊이
+               - 독창성과 가치 제공
 
-            3. **내용 요약 및 번역**:
-               - 영어 기사는 한국어로 자연스럽게 번역합니다.
-               - 각 기사의 핵심 내용을 2-3문장으로 요약합니다.
-               - 원문의 의미를 훼손하지 않으면서 명확하고 간결하게 정리합니다.
+            4. **사용자 경험 및 가독성 (25점)**
+               - 문장 길이와 가독성
+               - 단락 구성과 시각적 구조
+               - 검색 의도와의 일치도
 
-            4. **전체 기사 처리**:
-               - 수집된 모든 기사에 대해 작업을 수행합니다 (선별하지 말고 전체 처리).
-               - 각 기사마다 동일한 품질로 처리합니다.
-               - 접속 불가능한 링크는 건너뛰고, 가능한 기사들만 처리합니다.
+            ## 출력 요구사항:
+            - **총점**: 0-100점 (각 항목별 점수 합산)
+            - **상세 분석**: 각 평가 기준별 현재 상태와 구체적 개선점
+            - **우선순위**: 가장 중요한 개선 영역 3가지
+            - **실행 가능한 개선안**: 구체적이고 즉시 적용 가능한 방법
 
-            **중요 지침:**
-            - 실제 웹사이트에 접속하여 기사 본문을 가져와야 합니다.
-            - 기존 RSS 요약문에 의존하지 말고 전체 기사를 읽고 요약하세요.
-            - 모든 외국어 기사는 한국어로 번역하세요.
-            - 일관된 형식으로 모든 기사를 처리하세요.
+            분석 대상 게시물: {post}
+            타겟 주제: {topic}
             """,
             expected_output="""
-            다음 형식의 JSON 리스트:
-            [
-                {
-                    "original_title": "원본 기사 제목",
-                    "title": "번역된 기사 제목 (한국어)",
-                    "published_date": "발행 날짜",
-                    "source": "출처",
-                    "category": "카테고리 (정치/경제/사회/국제/스포츠/문화 등)",
-                    "original_summary": "원본 RSS 요약",
-                    "full_content_summary": "실제 기사 본문 기반 상세 요약 (한국어, 2-3문장)",
-                    "key_points": ["핵심 포인트 1", "핵심 포인트 2", "핵심 포인트 3"],
-                    "article_url": "기사 원본 URL",
-                    "importance_score": "1-10 중요도 점수"
-                }
-            ]
-            글로벌 뉴스와 한국 뉴스 모든 기사의 상세 분석 결과
+            다음을 포함하는 Score 객체:
+            - score: SEO 품질을 평가하는 0-100 사이의 정수
+            - reason: 점수에 영향을 미치는 주요 요인을 설명하는 문자열
             """,
-            output_file="output/edited_articles.json",
-        )
-
-    #############################################
-    @task
-    def curate_final_news_task(self) -> Task:
-        return Task(
-            agent=self.news_curator_agent(),
-            description="""
-            편집된 모든 뉴스 기사들을 분석하여 가장 중요하고 적절한 10개의 뉴스를 선별하고 최종 리포트를 작성합니다.
-
-            **필수 작업 순서:**
-
-            1. **이전 Task 결과 활용**:
-               - edit_and_summarize_articles_task에서 생성된 모든 편집 완료된 기사 데이터를 분석합니다.
-               - 각 기사의 중요도 점수, 카테고리, 내용을 종합적으로 평가합니다.
-
-            2. **뉴스 선별 기준**:
-               - 중요도 점수가 양호한 기사들을 우선 고려합니다 (7점 이상 우선)
-               - 글로벌 뉴스는 전체의 30% 정도 (3개)로 제한합니다
-               - 한국 뉴스는 전체의 70% 정도 (7개)로 구성합니다
-               - 다양한 카테고리의 균형을 맞춥니다 (정치/경제/사회/국제 등)
-               - 시의성과 사회적 파급효과를 고려합니다
-
-            3. **최종 리포트 작성**:
-               - 선별된 10개 기사를 보기 좋게 정리합니다
-               - 각 기사별로 헤드라인, 요약, 원문 소스, 출처를 명확히 표시합니다
-               - 전체적인 뉴스 동향에 대한 간단한 요약을 추가합니다
-               - 독자가 이해하기 쉬운 형태로 구성합니다
-
-            **선별 우선순위:**
-            1. 중요도 점수 (7점 이상)
-            2. 시의성 (최신성)
-            3. 사회적 파급효과
-            4. 카테고리 다양성
-            5. 글로벌/국내 뉴스 비중 (3:7)
-            """,
-            expected_output="""
-            다음과 같은 형식의 최종 뉴스 리포트 (TXT 형식):
-
-            ============================================
-                        오늘의 주요 뉴스 리포트
-                        [날짜: YYYY-MM-DD]
-            ============================================
-
-            📊 **뉴스 브리핑 요약**
-            - 글로벌 뉴스: 3건 (30%)
-            - 국내 뉴스: 7건 (70%)
-            - 주요 이슈: [전체적인 동향 요약]
-
-            ============================================
-                            📰 주요 뉴스
-            ============================================
-
-            [1] 🌍 [카테고리] 헤드라인
-            📅 발행일: YYYY-MM-DD
-            📰 출처: 언론사명
-            🔗 원문: URL
-
-            📝 요약:
-            [핵심 내용 요약 2-3문장]
-
-            💡 핵심 포인트:
-            • 핵심 포인트 1
-            • 핵심 포인트 2
-            • 핵심 포인트 3
-
-            ────────────────────────────────────────
-
-            [반복...]
-
-            ============================================
-                        📋 전체 뉴스 동향 분석
-            ============================================
-
-            **오늘의 주요 이슈:**
-            [선별된 10개 뉴스를 바탕으로 한 전체적인 동향 분석 및 요약]
-
-            **카테고리별 분포:**
-            - 정치: X건
-            - 경제: X건
-            - 사회: X건
-            - 국제: X건
-            - 기타: X건
-
-            **주목할 만한 트렌드:**
-            [전반적인 뉴스 트렌드 및 패턴 분석]
-
-            ============================================
-            """,
-            output_file="output/curated_news.txt",
+            agent=self.seo_agent(),
+            output_pydantic=ScoreManager,
         )
 
     @crew
-    def crew(self) -> Crew:
+    def crew(self):
         return Crew(
-            agents=[
-                self.research_specialist_agent(),
-                self.senior_editor_agent(),
-                self.news_curator_agent(),
-            ],
-            tasks=[
-                self.research_global_news_task(),
-                self.research_korea_news_task(),
-                self.edit_and_summarize_articles_task(),
-                self.curate_final_news_task(),
-            ],
-            verbose=True,
+            agents=[self.seo_agent()], tasks=[self.check_seo_task()], verbose=True
         )
 
 
-NewsCrew().crew().kickoff()
+class BlogContentMakerFlow(Flow[BlogContentMakerState]):
+    @start()
+    def init_make_blog_content(self):
+        if self.state.topic == "":
+            raise ValueError("주제는 비워둘 수 없습니다")
+
+    @listen(init_make_blog_content)
+    def research_by_topic(self):
+        researcher = Agent(
+            role="수석 연구원",
+            backstory="당신은 다양한 분야의 전문 데이터베이스와 최신 트렌드에 정통한 전문 리서처입니다. 과학적 연구 방법론을 기반으로 신뢰성 높은 정보를 수집하고, 복잡한 데이터를 읽기 쉽게 정리하여 핵심 인사이트를 추출하는 능력을 갖추고 있습니다.",
+            goal=f"{self.state.topic}에 대한 최신 트렌드, 과학적 근거, 실용적 활용 방안을 종합적으로 조사하여 독자에게 가치 있는 인사이트를 제공하세요.",
+            tools=[web_search_tool],
+            llm="openai/o4-mini",
+        )
+        self.state.research_data = researcher.kickoff(f"""
+            '{self.state.topic}' 주제에 대해 다음 요소들을 중심으로 종합적인 리서치를 수행하세요:
+
+            1. **최신 동향 및 트렌드**: 최근 1년 내 주요 발전 사항
+            2. **과학적/기술적 근거**: 신뢰성 있는 연구 데이터나 전문가 의견
+            3. **실용적 적용 사례**: 실제 활용 방법이나 사례 연구
+            4. **미래 전망**: 향후 발전 방향이나 예상 대안
+            5. **일반인을 위한 설명**: 전문용어를 쉽게 설명할 수 있는 자료
+
+            각 정보는 출처와 신뢰도를 포함하여 제공해 주세요.
+            """)
+
+    @listen(or_(research_by_topic, "remake"))
+    def handle_make_blog(self):
+        llm = LLM(model="openai/o4-mini")
+
+        score_reason = (
+            self.state.score_manager.reason if self.state.score_manager else ""
+        )
+        if self.state.post is None:
+            result = llm.call(f"""
+                다음 리서치 데이터(resarch data)를 기반으로 '{self.state.topic}' 주제에 대한 고품질 SEO 최적화 블로그 글을 작성해 주세요.
+
+                ## 작성 가이드라인:
+                ### 내용 구성
+                - **도입부**: 주제의 중요성과 현재 상황을 간결하게 설명
+                - **본문**: 3-4개 소주제로 나눠 체계적으로 설명
+                - **결론**: 핵심 인사이트와 실용적 시사점 제시
+
+                ### SEO 최적화 요소
+                - **제목**: 60자 이내, 주요 키워드 포함, 호기심 유발
+                - **키워드**: 주제 관련 키워드를 자연스럽게 배치
+                - **구조**: 논리적 흐름과 명확한 구성
+                - **길이**: {self.state.max_length}자 이내로 충분한 정보 제공
+
+                ### 타깃 독자
+                - 주제에 관심 있는 일반인부터 전문가까지
+                - 기초 개념부터 시작하여 심화 내용까지 포괄
+
+                반드시 다음 JSON 형식으로 응답하세요:
+                {{
+                    "title": "검색에 최적화된 매력적인 제목",
+                    "content": "구조화되고 유용한 블로그 내용",
+                    "hashtag": ["주요키워드1", "주요키워드2", "주요키워드3"]
+                }}
+
+                <research data>
+                -----------------------------
+                {self.state.research_data}
+                -----------------------------
+                </research data>
+                """)
+        else:
+            # 블로그 remake
+            result = llm.call(f"""
+            SEO 전문가의 분석에 따르면 '{self.state.topic}' 주제의 블로그 게시물(post)이 다음과 같은 이유로 개선이 필요합니다:
+            **SEO 분석 결과**: {score_reason}
+
+            ## 개선 전략:
+            ### 핵심 개선 영역
+            - **콘텐츠 품질 제고**: 더 깊이 있고 전문적인 정보 제공
+            - **SEO 최적화**: 키워드 배치, 제목 최적화, 구조 개선
+            - **사용자 경험**: 가독성과 유용성 향상
+            - **검색 의도**: 사용자가 찾는 정보와 매칭 개선
+
+            ### 리라이팅 가이드라인
+            1. **제목 개선**: 더 구체적이고 검색 친화적으로 수정
+            2. **콘텐츠 재구성**: 논리적 흐름과 명확한 구조
+            3. **가치 추가**: 실용적 정보와 인사이트 강화
+            4. **키워드 최적화**: 주요 키워드의 자연스러운 배치
+
+            반드시 다음 JSON 형식으로 응답하세요:
+            {{
+                "title": "SEO 최적화된 개선된 제목",
+                "content": "고품질로 리라이팅된 블로그 콘텐츠",
+                "hashtag": ["전략적키워드1", "전략적키워드2", "전략적키워드3"]
+            }}
+
+            <post>
+            --------------------------------
+            {self.state.post.model_dump_json()}
+            --------------------------------
+            </post>
+
+            다음 연구를 사용하세요.
+
+            <research data>
+            -----------------------------
+            {self.state.research_data}
+            -----------------------------
+            </research data>
+            """)
+
+        self.state.post = Post.model_validate_json(result)
+
+    @listen(handle_make_blog)
+    def manage_seo(self):
+        results = (
+            SEOManagerCrew()
+            .crew()
+            .kickoff(
+                inputs={
+                    "post": self.state.post.model_dump_json(),
+                    "topic": self.state.topic,
+                }
+            )
+        )
+        self.state.score_manager = results.pydantic
+
+    @listen(manage_seo)
+    def manage_score_router(self):
+        if (
+            self.state.score_manager and self.state.score_manager.score >= 70
+        ) or self.state.iteration >= 10:
+            self._save_to_markdown()
+            return None
+        else:
+            self.state.iteration += 1
+            return "remake"
+
+    def _save_to_markdown(self):
+        # 블로그 게시물을 마크다운 파일로 저장
+        if self.state.post is None or self.state.score_manager is None:
+            return
+        timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+        filename = f"{self.state.topic}_{timestamp}.md"
+
+        markdown_content = f"""
+        # {self.state.post.title}
+        **주제**: {self.state.topic}
+        **작성일**: {datetime.now().strftime("%Y년 %m월 %d일 %H:%M")}
+        **SEO 점수**: {self.state.score_manager.score}/100
+
+        ## 내용
+        {self.state.post.content}
+
+        ## 해시태그
+        {' '.join(f'#{tag}' for tag in self.state.post.hashtag)}
+
+        ## SEO 분석
+        **점수**: {self.state.score_manager.score}/100
+        **분석**: {self.state.score_manager.reason}
+        """
+
+        with open(filename, "w", encoding="utf-8") as file:
+            file.write(markdown_content)
+
+        print("블로그 게시물이 저장되었습니다.")
+
+
+flow = BlogContentMakerFlow()
+flow.kickoff(inputs={"topic": "인공지능의 미래"})
+flow.plot()
