@@ -1,115 +1,86 @@
 import os
-from langchain_openai import ChatOpenAI
-from langchain_core.messages import HumanMessage, SystemMessage
-from langgraph.graph import StateGraph, START, END
-from typing_extensions import TypedDict
-from env import OPENAI_API_KEY, GOOGLE_API_KEY
+from crewai import Crew, Agent, Task
+from crewai.project import CrewBase, task, agent, crew
+from env import (
+    OPENAI_API_KEY,
+    GOOGLE_API_KEY,
+    NAVER_API_CLIENT_ID,
+    NAVER_API_SECRET_KEY,
+)
 
 os.environ["OPENAI_API_KEY"] = OPENAI_API_KEY
-os.environ["GOOGLE_API_KEY"] = GOOGLE_API_KEY
 
 
-class AgentState(TypedDict):
-    """
-    에이전트 상태 정의
-    - messages: 대화 메시지 리스트
-    - user_query: 사용자의 원본 질문
-    """
+@CrewBase
+class ChatBotCrew:
+    @agent
+    def communication_agent(self) -> Agent:
+        return Agent(
+            role="전문 소통 분석가",
+            goal="사용자의 질문을 심층적으로 분석하고, 가장 정확하고 유용한 정보를 찾아내어 전달한다.",
+            backstory="""
+            당신은 최첨단 AI 기술과 깊이 있는 데이터 분석 능력을 겸비한 전문 정보 분석가입니다.
+            어떤 질문이든 그 본질을 파악하고, 웹 검색과 같은 강력한 도구를 활용하여
+            사용자에게 가장 필요한 맞춤형 답변을 제공하는 것을 사명으로 삼고 있습니다.
+            """,
+            llm="openai/o4-mini",
+            tools=[],
+        )
 
-    messages: list
-    user_query: str
+    @task
+    def communication_task(self) -> Task:
+        return Task(
+            agent=self.communication_agent(),
+            description="""
+            사용자로부터 받은 메시지('{message}')를 단계별로 분석합니다.
+            1. 질문의 핵심 키워드와 숨은 의도를 파악합니다.
+            2. 필요 시, 웹 검색 도구를 사용하여 관련 최신 정보를 찾습니다.
+            3. 수집된 정보를 종합하여 사용자가 이해하기 쉬운 형태로 명확하고 친절한 답변을 생성합니다.
+            """,
+            expected_output="""
+            사용자의 질문 의도에 완벽하게 부합하는, 명확하고 간결하며 친절한 톤의 한국어 답변.
+            질문이 정보성 질문의 경우, 핵심 내용을 요약하고 신뢰할 수 있는 출처(URL)를 포함해야 합니다.
+            분석 과정이나 단계별 설명 없이, 최종 답변만 출력하세요.
+            """,
+        )
 
-
-# LangGraph 워크플로우 구성 함수
-def create_langgraph_workflow():
-    """
-    LangGraph 워크플로우 생성
-    START → analyze_query → generate_response → END
-    """
-    # 1. llm 인스턴스 생성
-    model = ChatOpenAI(model="gpt-4o-mini")
-
-    # 2 노드 정의
-    ## 1. 질문분석 노드 : 시스템 메시지, 사용자 질문 준비
-    def analyze_query_node(state: AgentState) -> AgentState:
-        user_query = state["user_query"]
-
-        return {
-            "messages": [
-                SystemMessage(
-                    content="당신은 전문 AI 어시스턴트입니다. 사용자의 질문에 친절한 한국어 답변을 제공하세요."
-                ),
-                HumanMessage(content=user_query),
-            ],
-            "user_query": user_query,
-        }
-
-    ## 2. 응답생성 노드 : LLM에 메시지 전달 → 응답 생성
-    def generate_response_node(state: AgentState) -> AgentState:
-        messages = state["messages"]
-        response = model.invoke(messages)
-        return {
-            "messages": [response],
-            "user_query": state["user_query"],
-        }
-
-    workflow = StateGraph(AgentState)
-    workflow.add_node("analyze_query", analyze_query_node)
-    workflow.add_node("generate_response", generate_response_node)
-    workflow.add_edge(START, "analyze_query")
-    workflow.add_edge("analyze_query", "generate_response")
-    workflow.add_edge("generate_response", END)
-    return workflow.compile()
-
-
-class LangGraphChatBot:
-    def __init__(self):
-        self.workflow = create_langgraph_workflow()
-
-    def process_message(self, user_query: str) -> str:
-        init_stage: AgentState = {
-            "messages": [],
-            "user_query": user_query,
-        }
-        try:
-            result = self.workflow.invoke(init_stage)
-            return str(result["messages"][0].content)  # 마지막 메시지(LLM 응답) 반환
-        except Exception as e:
-            print(f"Error occurred: {e}")
-            return "에이전트 응답"
+    @crew
+    def crew(self) -> Crew:
+        return Crew(
+            name="ChatBotCrew",
+            agents=[self.communication_agent()],
+            tasks=[self.communication_task()],
+            verbose=True,
+        )
 
 
 def main():
     """터미널 무한 루프 챗봇"""
     print("=" * 60)
-    print("LangGraph 챗봇이 시작됐습니다.")
+    print("CrewAI 챗봇이 시작됐습니다.")
     print("종료하려면 'exit', 'quit', '종료' 중 하나를 입력하세요.")
     print("(또는 Ctrl+C / Ctrl+D 로 즉시 종료 가능)")
     print("=" * 60)
-
-    # 챗봇 인스턴스 한 번만 생성 (workflow 컴파일도 한 번만 일어남)
-    chatbot = LangGraphChatBot()
-
+    # Crew 인스턴스는 매 입력마다 새로 생성 (CrewBase 패턴)
     while True:
         try:
-            user_input = input("\n나: ").strip()
+            user_message = input("\n나: ").strip()
         except (EOFError, KeyboardInterrupt):
-            # Ctrl+D 또는 Ctrl+C 로 종료
             print("\n\n챗봇을 종료합니다. 안녕히 가세요.")
             break
 
         # 빈 입력은 건너뛰기
-        if not user_input:
+        if not user_message:
             continue
 
         # 종료 명령
-        if user_input.lower() in ("exit", "quit", "종료"):
+        if user_message.lower() in ("exit", "quit", "종료"):
             print("챗봇을 종료합니다. 안녕히 가세요.")
             break
 
-        # LangGraph 워크플로우 통과 → 응답 출력
-        response = chatbot.process_message(user_input)
-        print(f"\n에이전트: {response}")
+        # CrewAI 실행 → 결과 출력
+        result = ChatBotCrew().crew().kickoff(inputs={"message": user_message}).raw
+        print(f"\n에이전트: {result}")
 
 
 if __name__ == "__main__":
