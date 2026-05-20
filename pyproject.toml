@@ -1,5 +1,5 @@
 [project]
-name = "mcp-a2a-workshop"
+name = "agent-a-to-z"
 version = "0.1.0"
 description = "ai agent offline class"
 readme = "README.md"
@@ -11,7 +11,8 @@ dependencies = [
     "langchain-community==0.3.29",
     "tiktoken==0.11.0",
     "pypdf==5.9.0",
-    "google-adk==1.14.1",
+    "google-adk[a2a]==1.14.1",
+    "a2a-sdk==0.3.26",
     "google-genai==1.38.0",
     "litellm==1.77.1",
     "openai==1.108.1",
