@@ -11,6 +11,8 @@ dependencies = [
     "langgraph==0.6.7",
     "langchain-openai==0.2.14",
     "langchain-community==0.3.29",
-    "openai==1.109.1",
-    "feedparser>=6.0.12",
+    "feedparser==6.0.11",
+    "pytz==2025.2",
+    "tiktoken==0.11.0",
+    "pypdf==5.9.0",
 ]

@@ -1,4 +1,4 @@
-from tutor_crew import EnglishTutorCrew, add_to_conversation
+from rag_tutor_crew import EnglishTutorCrew, add_to_conversation
 
 
 def main() -> None:
