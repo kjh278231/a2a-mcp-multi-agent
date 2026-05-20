@@ -5,5 +5,16 @@ description = "ai agent offline class"
 readme = "README.md"
 requires-python = ">=3.13, <3.14"
 dependencies = [
-    "ollama>=0.5.0",
+    "dotenv==0.9.9",
+    "langgraph==0.6.7",
+    "langchain-openai==0.2.14",
+    "langchain-community==0.3.29",
+    "tiktoken==0.11.0",
+    "pypdf==5.9.0",
+    "google-adk==1.14.1",
+    "google-genai==1.38.0",
+    "litellm==1.77.1",
+    "openai==1.108.1",
+    "chromadb==1.5.0",
+    "ollama==0.5.0",
 ]
